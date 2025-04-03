@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Infinite Up Platformer Multiplayer</title>
+  <style>
+    body, html { margin: 0; padding: 0; height: 100%; background-color: #87ceeb; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+    canvas { background-color: #f0f8ff; border: 1px solid #ccc; }
+    #score { position: absolute; top: 10px; left: 10px; font-size: 16px; font-weight: bold; color: #333; }
+  </style>
+  <script src="https://cdn.jsdelivr.net/npm/@croquet/croquet@2.0.0-47"></script>
+</head>
+<body>
+  <div id="score">Score: 0</div>
+  <canvas id="gameCanvas" width="400" height="600"></canvas>
+
+  <script>
+    class GameModel extends Croquet.Model {
+      init() {
+        this.players = new Map();
+        this.platforms = [];
+        this.createInitialPlatforms();
+        this.subscribe(this.sessionId, "player-join", this.addPlayer);
+        this.subscribe(this.sessionId, "player-move", this.movePlayer);
+        this.future(50).gameTick();
+      }
+
+      createInitialPlatforms() {
+        this.platforms = [{ x: 0, y: 580, width: 400, height: 20 }];
+        for (let i = 1; i < 10; i++) {
+          this.platforms.push({ x: Math.random() * 320, y: 580 - i * 80, width: 80, height: 15 });
+        }
+      }
+
+      addPlayer(viewId) {
+        this.players.set(viewId, { x: 180, y: 500, vy: 0, score: 0 });
+      }
+
+      movePlayer({ viewId, direction }) {
+        const player = this.players.get(viewId);
+        if (!player) return;
+        player.x += direction * 5;
+        player.x = Math.max(0, Math.min(360, player.x));
+      }
+
+      gameTick() {
+        for (let [id, player] of this.players.entries()) {
+          player.vy += 0.5;
+          player.y += player.vy;
+
+          for (let p of this.platforms) {
+            if (player.vy > 0 && player.x + 40 > p.x && player.x < p.x + p.width && player.y + 40 > p.y && player.y + 40 < p.y + p.height) {
+              player.vy = -15;
+            }
+          }
+
+          if (player.y < 250) {
+            const scroll = 250 - player.y;
+            player.y = 250;
+            player.score += Math.floor(scroll);
+            this.platforms.forEach(p => p.y += scroll);
+            if (this.platforms[0].y > 600) this.platforms.shift();
+            while (this.platforms.length < 10) {
+              const lastPlatform = this.platforms[this.platforms.length - 1];
+              this.platforms.push({ x: Math.random() * 320, y: lastPlatform.y - 80, width: 80, height: 15 });
+            }
+          }
+
+          if (player.y > 600) this.publish(id, "game-over", player.score);
+        }
+        this.future(50).gameTick();
+      }
+    }
+    GameModel.register("GameModel");
+
+    class GameView extends Croquet.View {
+      constructor(model) {
+        super(model);
+        this.model = model;
+        this.player = null;
+        this.canvas = document.getElementById('gameCanvas');
+        this.ctx = this.canvas.getContext('2d');
+
+        document.addEventListener('keydown', e => this.keyHandler(e, true));
+        document.addEventListener('keyup', e => this.keyHandler(e, false));
+
+        this.subscribe(this.viewId, "game-over", this.gameOver);
+        this.publish(this.sessionId, "player-join", this.viewId);
+
+        this.direction = 0;
+        requestAnimationFrame(() => this.render());
+      }
+
+      keyHandler(e, isKeyDown) {
+        if (e.key === 'ArrowLeft') this.direction = isKeyDown ? -1 : 0;
+        if (e.key === 'ArrowRight') this.direction = isKeyDown ? 1 : 0;
+        this.publish(this.sessionId, "player-move", { viewId: this.viewId, direction: this.direction });
+      }
+
+      render() {
+        this.ctx.clearRect(0, 0, 400, 600);
+
+        for (let p of this.model.platforms) {
+          this.ctx.fillStyle = 'green';
+          this.ctx.fillRect(p.x, p.y, p.width, p.height);
+        }
+
+        for (let [id, player] of this.model.players.entries()) {
+          this.ctx.fillStyle = id === this.viewId ? 'red' : 'blue';
+          this.ctx.fillRect(player.x, player.y, 40, 40);
+          if (id === this.viewId) document.getElementById('score').innerText = 'Score: ' + player.score;
+        }
+
+        requestAnimationFrame(() => this.render());
+      }
+
+      gameOver(score) {
+        alert('Game Over! Your Score: ' + score);
+        location.reload();
+      }
+    }
+
+    Croquet.Session.join({
+      apiKey: '2cXOhXx03EA5dHxf3hPLEuCMozPdyKlirLcIgOyxzI',
+      appId: 'io.multiplayer.platformer',
+      name: Croquet.App.autoSession(),
+      password: Croquet.App.autoPassword(),
+      model: GameModel,
+      view: GameView,
+    });
+  </script>
+</body>
+</html>
