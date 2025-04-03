@@ -84,15 +84,36 @@ class PlatformerGame extends Croquet.Model {
         this.subscribe(this.sessionId, "view-exit", this.playerExited);
         this.subscribe(this.sessionId, "move-left", this.handleMoveLeft);
         this.subscribe(this.sessionId, "move-right", this.handleMoveRight);
+        this.subscribe(this.sessionId, "restart-game", this.handleRestart);
         this.future(16).gameLoop();
     }
 
     createPlatforms() {
+        // Start with ground platform
+        this.platforms = [{ x: 0, y: 590, width: 400, bounced: false }];
+        
         for(let i=1; i<100; i++) {
+            // Calculate difficulty based on height
+            // Start easy (1.0) and get harder (down to 0.2) as you go up
+            const difficultyFactor = Math.max(0.2, 1.0 - (i / 100));
+            
+            // Platform width starts wide and gets narrower
+            const minWidth = 30;
+            const width = minWidth + (100 * difficultyFactor);
+            
+            // Horizontal position gets more random as you go up
+            const maxOffset = 350 - width;
+            const x = Math.random() * maxOffset;
+            
+            // Vertical gaps between platforms increase with height
+            const baseGap = 80;
+            const extraGap = i * 0.5; // Gradually increase gap
+            const y = 600 - (i * (baseGap + (extraGap * difficultyFactor)));
+            
             this.platforms.push({ 
-                x: Math.random()*350, 
-                y: 600 - i*80, 
-                width: 50,
+                x: x, 
+                y: y, 
+                width: width,
                 bounced: false
             });
         }
@@ -168,72 +189,76 @@ class PlatformerGame extends Croquet.Model {
         });
     }
 
+    handleRestart(viewId) {
+        // Reset the specific player
+        const player = this.players.get(viewId);
+        if (player) {
+            player.alive = true;
+            player.worldY = 550;
+            player.y = 550;
+            player.dy = 0;
+            player.cameraY = 0;
+            player.score = 0;
+            player.highestPlatform = 0;
+        }
+        // Reset platforms
+        this.platforms = [{ x: 0, y: 590, width: 400, bounced: false }];
+        this.createPlatforms();
+    }
+
     gameLoop() {
         for (let [id, player] of this.players) {
             if (!player.alive) continue;
 
-            // Move player based on current movement state
-            if (player.movingLeft) {
-                player.x = Math.max(0, player.x - 5);
-            }
-            if (player.movingRight) {
-                player.x = Math.min(380, player.x + 5);
-            }
+            this.updatePlayerPosition(player);
 
-            // Physics updates
             player.dy += 0.5;
             player.worldY += player.dy;
-            player.y = player.worldY - player.cameraY;
 
             // Check for platform collisions
             for (let plat of this.platforms) {
-                const platScreenY = plat.y - player.cameraY;
-                
                 if (player.dy > 0 && player.worldY+20 > plat.y && player.worldY+20 < plat.y+10 
                     && player.x+20 > plat.x && player.x < plat.x+plat.width) {
+                    
                     player.dy = -10;
                     player.score = Math.max(player.score, Math.floor(590 - plat.y));
                     plat.bounced = true;
+                    
+                    // Camera shift logic - now just updates individual player's camera
+                    const playerScreenY = player.worldY - player.cameraY;
+                    if (playerScreenY < 300) {
+                        const targetY = 550;
+                        const moveAmount = playerScreenY - targetY;
+                        player.cameraY += moveAmount;
+                    }
                     
                     const platformIndex = this.platforms.indexOf(plat);
                     if (platformIndex > player.highestPlatform) {
                         player.highestPlatform = platformIndex;
                         player.lastPlatformY = plat.y;
                     }
-
-                    if (platScreenY < 300) {
-                        const targetY = 550;
-                        const moveAmount = plat.y - targetY;
-                        
-                        this.platforms.forEach(p => {
-                            p.y -= moveAmount;
-                        });
-                        
-                        player.worldY -= moveAmount;
-                        player.cameraY += moveAmount;
-                    }
                 }
             }
 
-            const groundPlatform = this.platforms[0];
-            const groundScreenY = groundPlatform.y - player.cameraY;
-            if (groundScreenY <= 600 && player.worldY + 20 > groundPlatform.y) {
-                player.worldY = groundPlatform.y - 20;
+            // Ground collision check
+            if (player.worldY + 20 > this.platforms[0].y) {
+                player.worldY = this.platforms[0].y - 20;
                 player.dy = -10;
             }
 
-            if (player.y > 600) {
-                const groundPlatform = this.platforms[0];
-                const groundScreenY = groundPlatform.y - player.cameraY;
-                
-                if (groundScreenY > 600) {
+            // Game over check - using world coordinates
+            if (player.worldY - player.cameraY > 620) {
+                if (this.platforms[0].y - player.cameraY > 600) {
                     player.alive = false;
                     player.score = Math.floor(590 - this.platforms[player.highestPlatform].y);
                     this.publish(this.sessionId, "game-over", { playerId: id, score: player.score });
                 }
             }
+
+            // Update player's screen position
+            player.y = player.worldY - player.cameraY;
+            this.publishPlayerUpdate(player);
         }
-        
         this.future(16).gameLoop();
     }
 }
@@ -321,13 +346,8 @@ class PlatformerView extends Croquet.View {
     setupRestartHandler() {
         this.restartButton.addEventListener('click', () => {
             this.gameOverModal.style.display = 'none';
-            this.player.alive = true;
-            this.player.worldY = 550;
-            this.player.y = 550;
-            this.player.cameraY = 0;
-            this.player.score = 0;
-            this.model.platforms = [{ x: 0, y: 590, width: 400, bounced: false }];
-            this.model.createPlatforms();
+            // Instead of modifying the model directly, publish a restart event
+            this.publish(this.sessionId, "restart-game", this.viewId);
         });
     }
 
@@ -363,12 +383,16 @@ class PlatformerView extends Croquet.View {
         requestAnimationFrame(() => this.update());
         this.ctx.clearRect(0, 0, 400, 600);
 
+        // Draw platforms relative to local player's camera
         this.ctx.fillStyle = 'green';
         for (let plat of this.model.platforms) {
-            this.ctx.fillRect(plat.x, plat.y - this.player.cameraY, plat.width, 10);
+            const platScreenY = plat.y - this.player.cameraY;
+            if (platScreenY >= -10 && platScreenY <= 600) {  // Only draw visible platforms
+                this.ctx.fillRect(plat.x, platScreenY, plat.width, 10);
+            }
         }
 
-        // Draw all players
+        // Draw all players relative to local player's camera
         for (let [id, player] of this.model.players) {
             const screenY = player.worldY - this.player.cameraY;
             if (screenY >= -20 && screenY <= 600) {
