@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Infinite Up Platformer</title>
+    <script src="https://cdn.jsdelivr.net/npm/@croquet/croquet@2.0.0-44/pub/croquet.min.js"></script>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            font-family: Arial, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            background: linear-gradient(skyblue, lightblue);
+        }
+        #gameContainer {
+            position: relative;
+            width: 400px;
+            height: 600px;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.3);
+            border-radius: 10px;
+            overflow: hidden;
+        }
+        canvas {
+            display: block;
+        }
+        #scoreboard {
+            position: absolute;
+            top: 10px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(255,255,255,0.8);
+            padding: 8px 12px;
+            border-radius: 10px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+            font-size: 16px;
+            z-index: 10;
+        }
+        #gameOverModal {
+            display: none;
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(255, 255, 255, 0.9);
+            padding: 20px;
+            border-radius: 10px;
+            text-align: center;
+            z-index: 100;
+        }
+        #restartButton {
+            margin-top: 20px;
+            padding: 10px 20px;
+            background: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+        #restartButton:hover {
+            background: #45a049;
+        }
+    </style>
+</head>
+<body>
+<div id="gameContainer">
+    <canvas id="gameCanvas" width="400" height="600"></canvas>
+    <div id="scoreboard">Score: 0</div>
+    <div id="gameOverModal">
+        <h2>Game Over!</h2>
+        <p>Your Score: <span id="finalScore">0</span></p>
+        <button id="restartButton">Play Again</button>
+    </div>
+</div>
+<script>
+class PlatformerGame extends Croquet.Model {
+    init() {
+        this.players = new Map();
+        this.platforms = [{ x: 0, y: 590, width: 400, bounced: false }];
+        this.createPlatforms();
+        this.subscribe(this.sessionId, "view-join", this.playerJoined);
+        this.subscribe(this.sessionId, "view-exit", this.playerExited);
+        this.subscribe(this.sessionId, "move-left", this.handleMoveLeft);
+        this.subscribe(this.sessionId, "move-right", this.handleMoveRight);
+        this.future(16).gameLoop();
+    }
+
+    createPlatforms() {
+        for(let i=1; i<100; i++) {
+            this.platforms.push({ 
+                x: Math.random()*350, 
+                y: 600 - i*80, 
+                width: 50,
+                bounced: false
+            });
+        }
+    }
+
+    playerJoined(viewId) {
+        console.log("Model: Player joined", viewId);
+        const colors = ['#FF0000', '#00FF00', '#0000FF', '#FFFF00', '#FF00FF', '#00FFFF'];
+        const color = colors[this.players.size % colors.length];
+        
+        const player = { 
+            viewId: viewId,
+            x: 190, 
+            y: 550, 
+            dy: 0, 
+            score: 0, 
+            alive: true,
+            highestPlatform: 0,
+            cameraY: 0,
+            worldY: 550,
+            lastPlatformY: 590,
+            color: color,
+            movingLeft: false,
+            movingRight: false
+        };
+        
+        this.players.set(viewId, player);
+        console.log("Model: Player created", player);
+    }
+
+    playerExited(viewId) {
+        this.players.delete(viewId);
+    }
+
+    handleMoveLeft([viewId, active]) {
+        console.log("Model: Move left", viewId, active);
+        const player = this.players.get(viewId);
+        if (player) {
+            player.movingLeft = Boolean(active);
+            console.log("Model: Player state after move left", player);
+            this.updatePlayerPosition(player);
+        }
+    }
+
+    handleMoveRight([viewId, active]) {
+        console.log("Model: Move right", viewId, active);
+        const player = this.players.get(viewId);
+        if (player) {
+            player.movingRight = Boolean(active);
+            console.log("Model: Player state after move right", player);
+            this.updatePlayerPosition(player);
+        }
+    }
+
+    updatePlayerPosition(player) {
+        if (player.movingLeft) {
+            player.x = Math.max(0, player.x - 5);
+        }
+        if (player.movingRight) {
+            player.x = Math.min(380, player.x + 5);
+        }
+        this.publishPlayerUpdate(player);
+    }
+
+    publishPlayerUpdate(player) {
+        this.publish(this.sessionId, "player-update", {
+            playerId: player.viewId,
+            x: player.x,
+            worldY: player.worldY,
+            cameraY: player.cameraY,
+            score: player.score,
+            color: player.color
+        });
+    }
+
+    gameLoop() {
+        for (let [id, player] of this.players) {
+            if (!player.alive) continue;
+
+            // Move player based on current movement state
+            if (player.movingLeft) {
+                player.x = Math.max(0, player.x - 5);
+            }
+            if (player.movingRight) {
+                player.x = Math.min(380, player.x + 5);
+            }
+
+            // Physics updates
+            player.dy += 0.5;
+            player.worldY += player.dy;
+            player.y = player.worldY - player.cameraY;
+
+            // Check for platform collisions
+            for (let plat of this.platforms) {
+                const platScreenY = plat.y - player.cameraY;
+                
+                if (player.dy > 0 && player.worldY+20 > plat.y && player.worldY+20 < plat.y+10 
+                    && player.x+20 > plat.x && player.x < plat.x+plat.width) {
+                    player.dy = -10;
+                    player.score = Math.max(player.score, Math.floor(590 - plat.y));
+                    plat.bounced = true;
+                    
+                    const platformIndex = this.platforms.indexOf(plat);
+                    if (platformIndex > player.highestPlatform) {
+                        player.highestPlatform = platformIndex;
+                        player.lastPlatformY = plat.y;
+                    }
+
+                    if (platScreenY < 300) {
+                        const targetY = 550;
+                        const moveAmount = plat.y - targetY;
+                        
+                        this.platforms.forEach(p => {
+                            p.y -= moveAmount;
+                        });
+                        
+                        player.worldY -= moveAmount;
+                        player.cameraY += moveAmount;
+                    }
+                }
+            }
+
+            const groundPlatform = this.platforms[0];
+            const groundScreenY = groundPlatform.y - player.cameraY;
+            if (groundScreenY <= 600 && player.worldY + 20 > groundPlatform.y) {
+                player.worldY = groundPlatform.y - 20;
+                player.dy = -10;
+            }
+
+            if (player.y > 600) {
+                const groundPlatform = this.platforms[0];
+                const groundScreenY = groundPlatform.y - player.cameraY;
+                
+                if (groundScreenY > 600) {
+                    player.alive = false;
+                    player.score = Math.floor(590 - this.platforms[player.highestPlatform].y);
+                    this.publish(this.sessionId, "game-over", { playerId: id, score: player.score });
+                }
+            }
+        }
+        
+        this.future(16).gameLoop();
+    }
+}
+PlatformerGame.register("PlatformerGame");
+
+class PlatformerView extends Croquet.View {
+    constructor(model) {
+        super(model);
+        this.model = model;
+        this.otherPlayers = new Map();
+
+        this.canvas = document.getElementById('gameCanvas');
+        this.ctx = this.canvas.getContext('2d');
+        this.scoreboard = document.getElementById('scoreboard');
+        this.gameOverModal = document.getElementById('gameOverModal');
+        this.finalScoreDisplay = document.getElementById('finalScore');
+        this.restartButton = document.getElementById('restartButton');
+
+        // Subscribe to model updates
+        this.subscribe(this.sessionId, "player-update", this.handlePlayerUpdate);
+        this.subscribe(this.sessionId, "game-over", this.handleGameOver);
+
+        // Initialize player
+        this.player = {
+            viewId: this.viewId,
+            x: 190,
+            y: 550,
+            worldY: 550,
+            cameraY: 0,
+            score: 0,
+            color: '#FF0000',
+            alive: true
+        };
+
+        // Fix the key handlers to properly pass the active state
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'ArrowLeft') {
+                this.publish(this.sessionId, "move-left", [this.viewId, true]);
+            }
+            if (e.key === 'ArrowRight') {
+                this.publish(this.sessionId, "move-right", [this.viewId, true]);
+            }
+        });
+
+        document.addEventListener('keyup', (e) => {
+            if (e.key === 'ArrowLeft') {
+                this.publish(this.sessionId, "move-left", [this.viewId, false]);
+            }
+            if (e.key === 'ArrowRight') {
+                this.publish(this.sessionId, "move-right", [this.viewId, false]);
+            }
+        });
+
+        // Simple touch controls
+        let touchStartX = null;
+        this.canvas.addEventListener('touchstart', (e) => {
+            touchStartX = e.touches[0].clientX;
+        });
+
+        this.canvas.addEventListener('touchmove', (e) => {
+            if (touchStartX === null) return;
+            
+            const currentX = e.touches[0].clientX;
+            const diff = currentX - touchStartX;
+            
+            if (diff < -30) {
+                this.publish(this.sessionId, "move-left", this.viewId, true);
+                this.publish(this.sessionId, "move-right", this.viewId, false);
+            } else if (diff > 30) {
+                this.publish(this.sessionId, "move-right", this.viewId, true);
+                this.publish(this.sessionId, "move-left", this.viewId, false);
+            }
+        });
+
+        this.canvas.addEventListener('touchend', () => {
+            touchStartX = null;
+            this.publish(this.sessionId, "move-left", this.viewId, false);
+            this.publish(this.sessionId, "move-right", this.viewId, false);
+        });
+
+        this.setupRestartHandler();
+        this.update();
+    }
+
+    setupRestartHandler() {
+        this.restartButton.addEventListener('click', () => {
+            this.gameOverModal.style.display = 'none';
+            this.player.alive = true;
+            this.player.worldY = 550;
+            this.player.y = 550;
+            this.player.cameraY = 0;
+            this.player.score = 0;
+            this.model.platforms = [{ x: 0, y: 590, width: 400, bounced: false }];
+            this.model.createPlatforms();
+        });
+    }
+
+    handlePlayerUpdate(data) {
+        console.log("View: Player update received:", data);
+        if (data.playerId === this.viewId) {
+            // Update local player
+            this.player.x = data.x;
+            this.player.worldY = data.worldY;
+            this.player.cameraY = data.cameraY;
+            this.player.score = data.score;
+            this.player.color = data.color;
+        } else {
+            // Update other players
+            this.otherPlayers.set(data.playerId, {
+                x: data.x,
+                worldY: data.worldY,
+                cameraY: data.cameraY,
+                score: data.score,
+                color: data.color
+            });
+        }
+    }
+
+    handleGameOver(data) {
+        if (data.playerId === this.viewId) {
+            this.finalScoreDisplay.textContent = data.score;
+            this.gameOverModal.style.display = 'block';
+        }
+    }
+
+    update() {
+        requestAnimationFrame(() => this.update());
+        this.ctx.clearRect(0, 0, 400, 600);
+
+        this.ctx.fillStyle = 'green';
+        for (let plat of this.model.platforms) {
+            this.ctx.fillRect(plat.x, plat.y - this.player.cameraY, plat.width, 10);
+        }
+
+        // Draw all players
+        for (let [id, player] of this.model.players) {
+            const screenY = player.worldY - this.player.cameraY;
+            if (screenY >= -20 && screenY <= 600) {
+                this.ctx.fillStyle = player.color;
+                this.ctx.fillRect(player.x, screenY, 20, 20);
+                if (id === this.viewId) {
+                    this.scoreboard.innerText = `Score: ${player.score}`;
+                }
+            }
+        }
+    }
+}
+
+Croquet.Session.join({
+    apiKey: '1_i65fcn11n7lhrb5n890hs3dhj11hfzfej57pvlrx',
+    appId: 'com.example.infiniteplatformer',
+    name: Croquet.App.autoSession(),
+    password: Croquet.App.autoPassword(),
+    model: PlatformerGame,
+    view: PlatformerView
+});
+</script>
+</body>
+</html>
+

@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Infinite Up Platformer</title>
+  <style>body, html {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    background-color: #87ceeb;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: Arial, sans-serif;
+    overflow: hidden;
+    position: relative;
+  }
+  
+  canvas {
+    border: 1px solid #ccc;
+    background-color: #f0f8ff;
+  }
+  
+  #score {
+    position: absolute;
+    top: calc(50% - 290px); /* half of canvas height (600px/2=300px), minus offset */
+    right: calc(50% - 190px); /* half of canvas width (400px/2=200px), minus offset */
+    font-size: 18px;
+    font-weight: bold;
+    color: #333;
+    pointer-events: none;
+  }
+  
+  #gameOver {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    padding: 20px;
+    background-color: rgba(0, 0, 0, 0.8);
+    color: white;
+    display: none;
+    text-align: center;
+    border-radius: 8px;
+  }
+  
+  #retryBtn {
+    margin-top: 10px;
+    padding: 8px 16px;
+    cursor: pointer;
+  }
+  
+  </style>
+</head>
+<body>
+  <div id="score">Score: 0</div>
+  <canvas id="gameCanvas" width="400" height="600"></canvas>
+
+  <div id="gameOver">
+    <div id="finalScore"></div>
+    <button id="retryBtn">Try Again</button>
+  </div>
+
+  <script>
+    window.onload = function() {
+      const canvas = document.getElementById('gameCanvas');
+      const ctx = canvas.getContext('2d');
+
+      const player = { x: 180, y: 500, width: 40, height: 40, velocityY: 0, jumpStrength: 15 };
+      const gravity = 0.5;
+      const keys = { left: false, right: false };
+      let platforms = [];
+      let scrollOffset = 0;
+      let score = 0;
+
+      function createPlatform(y) {
+        return { x: Math.random() * (canvas.width - 80), y, width: 80, height: 15 };
+      }
+
+      function initPlatforms() {
+        platforms = [{ x: 0, y: 580, width: canvas.width, height: 20 }];
+        for (let i = 1; i < 8; i++) {
+          platforms.push(createPlatform(580 - i * 80));
+        }
+      }
+
+      function updatePlatforms() {
+        platforms.forEach(platform => platform.y += scrollOffset);
+        platforms = platforms.filter(platform => platform.y < canvas.height);
+        while (platforms.length < 8) {
+          const lastPlatform = platforms[platforms.length - 1];
+          platforms.push(createPlatform(lastPlatform.y - 80));
+        }
+      }
+
+      function drawPlayer() {
+        ctx.fillStyle = 'red';
+        ctx.fillRect(player.x, player.y, player.width, player.height);
+      }
+
+      function drawPlatforms() {
+        ctx.fillStyle = 'green';
+        platforms.forEach(p => ctx.fillRect(p.x, p.y, p.width, p.height));
+      }
+
+      function updatePlayer() {
+        player.velocityY += gravity;
+        player.y += player.velocityY;
+
+        if (keys.left && player.x > 0) player.x -= 5;
+        if (keys.right && player.x < canvas.width - player.width) player.x += 5;
+
+        if (player.y < 250) {
+          scrollOffset = 250 - player.y;
+          player.y = 250;
+          score += Math.floor(scrollOffset);
+          document.getElementById('score').innerText = 'Score: ' + score;
+        } else {
+          scrollOffset = 0;
+        }
+
+        platforms.forEach(p => {
+          if (player.velocityY > 0 && player.x + player.width > p.x && player.x < p.x + p.width && player.y + player.height > p.y && player.y + player.height < p.y + p.height) {
+            player.velocityY = -player.jumpStrength;
+          }
+        });
+
+        if (player.y > canvas.height) {
+          document.getElementById('gameOver').style.display = 'block';
+          document.getElementById('finalScore').innerText = 'Game Over! Your Score: ' + score;
+          cancelAnimationFrame(gameAnimation);
+        }
+      }
+
+      let gameAnimation;
+      function gameLoop() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        drawPlayer();
+        drawPlatforms();
+        updatePlayer();
+        updatePlatforms();
+        gameAnimation = requestAnimationFrame(gameLoop);
+      }
+
+      document.getElementById('retryBtn').addEventListener('click', () => {
+        document.getElementById('gameOver').style.display = 'none';
+        score = 0;
+        player.x = 180;
+        player.y = 500;
+        player.velocityY = 0;
+        initPlatforms();
+        gameLoop();
+      });
+
+      document.addEventListener('keydown', e => {
+        if (e.key === 'ArrowLeft') keys.left = true;
+        if (e.key === 'ArrowRight') keys.right = true;
+      });
+
+      document.addEventListener('keyup', e => {
+        if (e.key === 'ArrowLeft') keys.left = false;
+        if (e.key === 'ArrowRight') keys.right = false;
+      });
+
+      initPlatforms();
+      gameLoop();
+    };
+  </script>
+</body>
+</html>
